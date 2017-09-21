@@ -1,9 +1,6 @@
 import urllib
 from bs4 import BeautifulSoup
 import numpy as np
-#url = "http://mlb.mlb.com/stats/sortable.jsp?c_id=hou#game_type='R'&season=2017&league_code='MLB'&split=&playerType=ALL&sectionType=sp&statType=hitting&elem=%5Bobject+Object%5D&tab_level=child&click_text=Sortable+Player+hitting&season_type=ANY&page=1&ts=1505398381346&team_id=145"
-#page = urllib.urlopen(url).read()
-#soup = BeautifulSoup(page)
 
 action_dict = {
 'doubled': [1, 1, 1, 2, 0, 0, 0, 0, 0],
@@ -94,6 +91,9 @@ def get_vs_urls(last_season):
 	'''
 	store info on a batter's vs stats
 	'''
+	exception = ["D'", "O'"] #maybe O' too?
+	
+	
 	base_url = 'http://www.fangraphs.com/players.aspx'
 	page = urllib.urlopen(base_url).read()
 	soup = BeautifulSoup(page)
@@ -106,24 +106,28 @@ def get_vs_urls(last_season):
 	cnt = 0	
 	for url in urls:
 		print url
-		page = urllib.urlopen(url).read()
-		soup = BeautifulSoup(page)
-		players = soup.find_all('div', {'class':'search'})[0]
-		rows = players.table.find_all('tr')
-		for row in rows:
-			year_str = row.find_all('td')[1].string[-4:]
-			if year_str.isdigit() and int(year_str) >= last_season:
-				href = row.td.a['href']
-				name = row.td.a.string
-				vs_url = 'https://www.fangraphs.com/statsp.aspx?' + href[href.find('?')+1:]
-				vs_urls.append((name, vs_url))
-		cnt += 1
-		if cnt > 2:
-			break	
+		if url[-2:] not in exception: #idk why D' doesn't work...
+			page = urllib.urlopen(url).read()
+			soup = BeautifulSoup(page)
+			players = soup.find_all('div', {'class':'search'})[0]
+			rows = players.table.find_all('tr')
+			for row in rows:
+				year_str = row.find_all('td')[1].string[-4:]
+				if year_str.isdigit() and int(year_str) >= last_season:
+					href = row.td.a['href']
+					name = row.td.a.string
+					vs_url = 'https://www.fangraphs.com/statsp.aspx?' + href[href.find('?')+1:]
+					vs_urls.append((name, vs_url))
+			cnt += 1
+
 	return vs_urls
 
-	
-	
+'''
+url = "https://www.fangraphs.com/players.aspx?letter=D'"
+page = urllib.urlopen(url).read()
+soup = BeautifulSoup(page)
+players = soup.find_all('div', {'class':'search'})
+'''
 
 #url = 'http://www.fangraphs.com/statsp.aspx?playerid=15676&position=1B&season=2017'
 #url = 'http://www.fangraphs.com/statsp.aspx?playerid=8203&position=2B&season=2017'
@@ -275,6 +279,37 @@ soup = BeautifulSoup(page, 'lxml')
 create_table(db, 'Hamels_16', soup, 4972, '2016')
 ''' # checking if create_table would also work for pitchers
 
+
+'''
+import time
+import urllib2
+from bs4 import SoupStrainer
+start = time.time()
+url = "http://www.fangraphs.com/statsp.aspx?playerid=4972&position=P&season=2016"
+page = urllib2.urlopen(url).read()
+print time.time() - start
+links = SoupStrainer("tbody")
+soup = BeautifulSoup(page, "lxml", parse_only=links)
+print time.time() - start
+#create_table(db, 'Hamels_16', soup, 4972, '2016')
+'''
+
+'''
+table = []
+for row in response.css("tr.rgRow"):
+	rowl = []
+	for td in row.css('td::text'):
+		rowl.append(str(td.extract()))
+	table.append(rowl)
+
+import csv
+with open('Hamels_16.csv', 'wb') as f:
+	writer = csv.writer(f)
+	for rowl in table:
+		writer.writerow(rowl)
+'''
+	
+	
 def drop_table(db, tablename):
 	query = '''drop table ''' + tablename
 	db.execute(query)
@@ -283,9 +318,9 @@ def drop_table(db, tablename):
 def create_table(db, tablename, soup, batter_id, year, for_pitcher=False):
 	cursor = db.cursor()
 	if for_pitcher:
-		cursor.executescript('create table ' + tablename + ' (id number, date string, pname text, pid number, bname text, bid number, cat text, AB number, PA number, H number, SLGC number, BB number, IBB number, HBP number, SF number, SH number)')
+		cursor.executescript('create table ' + tablename + ' (id number, date string, pname text, bname text, cat text, AB number, PA number, H number, SLGC number, BB number, IBB number, HBP number, SF number, SH number)')
 	else:
-		cursor.executescript('create table ' + tablename + ' (id number, date string, bname text, bid number, pname text, pid number, cat text, AB number, PA number, H number, SLGC number, BB number, IBB number, HBP number, SF number, SH number)')
+		cursor.executescript('create table ' + tablename + ' (id number, date string, bname text, pname text, cat text, AB number, PA number, H number, SLGC number, BB number, IBB number, HBP number, SF number, SH number)')
 
 	batter_name = str(soup.strong.string) # string to remove unicode sign
 	id = 0
@@ -351,14 +386,89 @@ def create_table(db, tablename, soup, batter_id, year, for_pitcher=False):
 		if include and len(stat_row) == 9: # Stanton_16 showed a stat_row that is empty.. need to check why
 			id += 1
 			stat_row = tuple(stat_row)
-			total_row = str((id, date_str, batter_name, batter_id, pitcher_name, pitcher_id, cat) + stat_row)
+			total_row = str((id, date_str, batter_name + '_' + str(batter_id), pitcher_name + '_' + str(pitcher_id), cat) + stat_row)
 			#print total_row
 			statement = 'INSERT INTO ' + tablename + ' values ' + total_row
 			#print '|' + statement + '|' 
 			cursor.executescript(statement)
 			
+from os import listdir
+def create_tables(db, dirname):
+	files = [f for f in listdir(dirname)]
+	
+	for file in files:
+		tablename = file[:-4]
+		
+		print 'will create table', tablename
+		create_table_from_csv(db, tablename, dirname+'/'+file)
+
+			
+def create_table_from_csv(db, tablename, csvfile):
+	cursor = db.cursor()
+	print 'create table ' + tablename + ' (id number, date string, playername text, vsname text, cat text, AB number, PA number, H number, SLGC number, BB number, IBB number, HBP number, SF number, SH number)'
+	cursor.executescript('create table ' + tablename + ' (id number, date string, playername text, vsname text, cat text, AB number, PA number, H number, SLGC number, BB number, IBB number, HBP number, SF number, SH number)')
+
+	id = 0
+	cnt = 0
+	
+	with open(csvfile, 'rb') as f:
+		reader = csv.DictReader(f)
+		
+		for row in reader:
+			cnt += 1
+			if cnt % 100 == 0:
+				print 'working on row', cnt
+			playername, playerid, vsname, vsid, date_str, full_action = row['playername'], row['playerid'], row['vsname'], row['vsid'], row['date'], row['Play']
 			
 
+			log = full_action.split(' ')
+			print log
+			action = log[2]
+			
+			stat_row = ()
+			
+			include = True
+			cat = ''
+			
+			if action in action_dict:
+				stat_row = action_dict[action]
+				cat = action_dict_cat[action]
+			elif action == 'was':
+				for was_action in was_dict:
+					if was_action in full_action:
+						stat_row = was_dict[was_action]
+						cat = was_dict_cat[was_action]
+					else:
+						stat_row = [0] * 9
+						include = False   # need to ignore 'was caught stealing'
+			elif action == 'hit':
+				for hit_action in hit_dict:
+					if hit_action in full_action:
+						stat_row = hit_dict[hit_action]	
+						cat = hit_dict_cat[hit_action]
+			elif action == 'reached':
+				for reached_action in reached_dict:
+					if reached_action in full_action:
+						stat_row = reached_dict[reached_action]	
+						cat = reached_dict_cat[reached_action]
+			else:
+				print '@@@', full_action
+				stat_row = [0] * 9
+				include = False
+			
+			#print pitcher_name
+			#print full_action
+			
+			if include and len(stat_row) == 9: # Stanton_16 showed a stat_row that is empty.. need to check why
+				id += 1
+				stat_row = tuple(stat_row)
+				total_row = str((id, date_str, playername + '_' + playerid, vsname + '_' + vsid, cat) + stat_row)
+				#print total_row
+				statement = 'INSERT INTO ' + tablename + ' values ' + total_row
+				#print '|' + statement + '|' 
+				cursor.executescript(statement)
+
+			
 			
 def compare_with_total(db, tablename):
 	query = 'SELECT DISTINCT pname, id FROM ' + tablename
@@ -463,6 +573,32 @@ from sklearn.metrics.pairwise import euclidean_distances as euclid
 import numpy as np
 import math 
 
+def batters_for_pitcher(db, ptable):
+	'''
+	return a list of all batters who faced a single pitcher
+	'''
+	query = "SELECT DISTINCT vsname FROM " + ptable
+	cursor = db.cursor()
+	cursor.execute(query)
+	blist = cursor.fetchall()
+	return blist
+	
+
+def get_url_dict(vs_urls):
+	url_dict = {}
+	
+	for url_tup in vs_urls:
+		name, url = url_tup[0], url_tup[1]
+		splitted = name.split(' ')
+		newname = splitted[0][0] + ' ' + splitted[1]
+		
+		id = url[url.find("id=")+3:url.find("id=")+7]
+		
+		sql_id = newname + '_' + id
+		
+		url_dict[sql_id] = url
+	return url_dict
+	
 
 
 	
