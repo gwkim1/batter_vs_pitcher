@@ -117,6 +117,7 @@ def get_vs_urls(last_season):
 					href = row.td.a['href']
 					name = row.td.a.string
 					vs_url = 'https://www.fangraphs.com/statsp.aspx?' + href[href.find('?')+1:]
+					print href[href.find('?')+1:]
 					vs_urls.append((name, vs_url))
 			cnt += 1
 
@@ -248,6 +249,57 @@ def get_counts_per_pitcher(soup):
 	return slashlines
 	
 
+	
+def get_counts_per_pitcher(db, tablename):
+	total_dict = {}
+
+	for tr in soup.tbody.find_all('tr'):
+		pitcher_name = tr.find_all('td')[1].a.string
+		href = tr.find_all('td')[1].a['href']
+		pitcher_id = href[href.find('=')+1:href.find('&')]
+		
+		id = (pitcher_name, pitcher_id) 
+		if id not in total_dict:
+			total_dict[id] = np.zeros(9)
+		
+		full_action = tr.find_all('td')[6].string.split('.')[0]
+		log = full_action.split(' ')
+		action = log[2]
+		
+		#print action
+		if action in action_dict:
+			#print action_dict[action]
+			total_dict[id] += action_dict[action]
+		elif action == 'was':
+			for was_action in was_dict:
+				if was_action in full_action:
+					#print was_action, 'in', full_action
+					total_dict[id] += was_dict[was_action]
+		elif action == 'hit':
+			for hit_action in hit_dict:
+				if hit_action in full_action:
+					#print hit_action, 'in', full_action
+					total_dict[id] += hit_dict[hit_action]			
+		elif action == 'reached':
+			for reached_action in reached_dict:
+				if reached_action in full_action:
+					#print hit_action, 'in', full_action
+					total_dict[id] += reached_dict[reached_action]			
+		else:
+			print '@@@', full_action
+
+
+	slashlines = {}
+	
+	for id, action_counts in total_dict.items():
+		avg = action_counts[2] / action_counts[0]
+		obp = (action_counts[2] + action_counts[4] + action_counts[6]) / (action_counts[0] + action_counts[4] + action_counts[6] + action_counts[7])
+		slg = action_counts[3] / action_counts[0]
+		
+		slashlines[id] = (avg, obp, slg)
+			
+	return slashlines	
+	
 import sqlite3
 from prettytable import PrettyTable
 
@@ -405,8 +457,11 @@ def create_tables(db, dirname):
 			
 def create_table_from_csv(db, tablename, csvfile):
 	cursor = db.cursor()
-	print 'create table ' + tablename + ' (id number, date string, playername text, vsname text, cat text, AB number, PA number, H number, SLGC number, BB number, IBB number, HBP number, SF number, SH number)'
-	cursor.executescript('create table ' + tablename + ' (id number, date string, playername text, vsname text, cat text, AB number, PA number, H number, SLGC number, BB number, IBB number, HBP number, SF number, SH number)')
+	#print "create table " + tablename + " (id number, date string, playername text, vsname text, cat text, AB number, PA number, H number, SLGC number, BB number, IBB number, HBP number, SF number, SH number)"
+	query = ''.join(["create table ", tablename, " (id number, date string, playername text, vsname text, cat text, AB number, PA number, H number, SLGC number, BB number, IBB number, HBP number, SF number, SH number)"])
+	
+	#print query
+	cursor.executescript(query)
 
 	id = 0
 	cnt = 0
@@ -418,11 +473,13 @@ def create_table_from_csv(db, tablename, csvfile):
 			cnt += 1
 			if cnt % 100 == 0:
 				print 'working on row', cnt
-			playername, playerid, vsname, vsid, date_str, full_action = row['playername'], row['playerid'], row['vsname'], row['vsid'], row['date'], row['Play']
-			
+			playername, playerid, vsname, vsid, date_str, full_action = row['playername'].replace('.', '').replace("'", ''), row['playerid'].replace('&', ''), \
+																		row['vsname'].replace('.', '').replace("'", ''), row['vsid'].replace('&', ''), \
+																		row['date'], row['Play']
+			vsname = '_'.join(vsname.split(' '))
 
 			log = full_action.split(' ')
-			print log
+			#print log
 			action = log[2]
 			
 			stat_row = ()
@@ -452,7 +509,7 @@ def create_table_from_csv(db, tablename, csvfile):
 						stat_row = reached_dict[reached_action]	
 						cat = reached_dict_cat[reached_action]
 			else:
-				print '@@@', full_action
+				#print '@@@', full_action
 				stat_row = [0] * 9
 				include = False
 			
@@ -471,7 +528,8 @@ def create_table_from_csv(db, tablename, csvfile):
 			
 			
 def compare_with_total(db, tablename):
-	query = 'SELECT DISTINCT pname, id FROM ' + tablename
+	query = 'SELECT DISTINCT vsname, id FROM ' + tablename
+	print query 
 	cursor = db.cursor()
 	cursor.execute(query)
 	pitchers = cursor.fetchall()
@@ -503,7 +561,7 @@ def compare_with_total(db, tablename):
 		
 		pitcher_name = pitcher_tup[0]
 		#print cnt, pitcher_name
-		addition = '''with x as (select * from ''' + tablename + ''' where pname = "''' + str(pitcher_name) + '''")'''
+		addition = '''with x as (select * from ''' + tablename + ''' where vsname = "''' + str(pitcher_name) + '''")'''
 		
 		query = addition + '\n' + base_query
 		
@@ -540,20 +598,29 @@ def compare_with_total(db, tablename):
 '''
 SQL functions
 '''			
-def print_select(db, statement):
-    cursor = db.cursor()
-    cursor.execute(statement)
-    names = [desc[0] for desc in cursor.description]
-    rows = cursor.fetchall()
-    
-    x = PrettyTable(names)
-    for row in rows:
-        x.add_row(row)
-    
-    print x
-    
-    return 'success'
+def print_select(db, statement, verbose=True):
+	cursor = db.cursor()
+	cursor.execute(statement)
+	
+	if cursor.description != None:
+	
+		names = [desc[0] for desc in cursor.description]
+		rows = cursor.fetchall()
+		
+		x = PrettyTable(names)
+		for row in rows:
+			x.add_row(row)
+		if verbose:
+			print x
+	
+		return rows
+	else:
+		return []
 
+	
+	
+	
+	
 def table(db, tablename, limit=0):
 	query = "select * from " + tablename
 	if limit != 0:
@@ -573,7 +640,7 @@ from sklearn.metrics.pairwise import euclidean_distances as euclid
 import numpy as np
 import math 
 
-def batters_for_pitcher(db, ptable):
+def batters_for_pitcher(db, ptable, year_str):
 	'''
 	return a list of all batters who faced a single pitcher
 	'''
@@ -581,9 +648,177 @@ def batters_for_pitcher(db, ptable):
 	cursor = db.cursor()
 	cursor.execute(query)
 	blist = cursor.fetchall()
-	return blist
+	
+	filelist = []
+	for btup in blist:
+		bname = btup[0]
+		splitted = bname.split('_')
+
+		
+		if len(splitted) == 3:
+			filename = '_'.join([splitted[0], splitted[1], year_str, splitted[2]]).replace('.', '') + '.csv'
+		else:
+			filename = '_'.join([splitted[0], splitted[1], splitted[2], year_str, splitted[3]]).replace('.', '') + '.csv'
+
+		filelist.append(filename)
+	return filelist
 	
 
+def get_sim(rows):
+	newrows = []
+	for row in rows:
+		newrows.append(row[0])
+	
+	newrows = map(lambda x: int(x)**2, newrows)
+	
+	return 1 - math.sqrt(sum(newrows)) / math.sqrt(len(newrows))
+
+
+BASE_QUERY = '''
+with vs as (
+select xpname, xvsname, ypname, yvsname, xAVG, yAVG
+    from (select playername as xpname, vsname as xvsname, sum(H) as xH, sum(AB) as xAB,
+		sum(H) * 1.0 / sum(AB) as xAVG
+            from XBATTER
+            group by vsname ) as x
+    join (select playername as ypname, vsname as yvsname, sum(H) as yH, sum(AB) as yAB,
+		sum(H) * 1.0 / sum(AB) as yAVG
+            from YBATTER
+            group by vsname ) as y
+        on x.xvsname = y.yvsname 
+)
+
+select vs.xAVG - vs.yAVG as diff
+	from vs
+	where vs.xAVG is not null
+		and vs.yAVG is not null
+'''
+
+
+
+def get_sim_list(db, filelist, base_batter):
+	# base_batter is a filename already in filelist
+	
+	# first, create table if it doesn't exist in the db already
+	
+	rows = print_select(db, '''select name from sqlite_master''', verbose=False)
+	tables = map(lambda x: x[0], rows)
+	
+	for file in filelist:
+		tablename = file[:-4].replace("'", "") # O'Malley -> OMalley
+		tablename = tablename.replace(".", "") # Almora
+		
+		if tablename not in tables:
+			print file, tablename
+			create_table_from_csv(db, tablename, 'data/'+file)
+	
+	print base_batter
+	# remove base_batter
+	#filelist.remove(base_batter) -> why do we get an error?
+	# convert from filename to tablename
+	base_batter = base_batter[:-4]	
+	
+	
+	results = []
+	
+	# then, run the extension of the BASE_QUERY
+	for file in filelist:
+		tablename = file[:-4].replace("'", "")
+
+		query = BASE_QUERY.replace('XBATTER', base_batter)
+		query = query.replace('YBATTER', tablename)
+		#print query
+		
+		rows = print_select(db, query, verbose=False)
+		
+		if len(rows) > 10:
+			#print base_batter, tablename, get_sim(rows), len(rows)
+			results.append((get_sim(rows), base_batter, tablename))
+		#else: 
+		#	print base_batter, tablename, '<10 rows returned'
+	
+	return results
+	
+VS_QUERY = '''
+select playername, vsname, sum(AB) as AB,
+		sum(H) * 1.0 / sum(AB) as AVG
+            from PITCHER
+	where vsname = 'BATTER'      
+group by vsname
+'''	
+
+	
+def estimate_vs(db, results, pitcher, N):
+	results.sort()
+	results.reverse()
+	
+	top_res = results[1:N+1]  # excluding oneself
+	
+	
+	total_avg = 0
+	
+	valid_cnt = 0
+	
+	for res_tup in top_res:
+		query = VS_QUERY.replace('PITCHER', pitcher)
+		query = query.replace('BATTER', res_tup[-1].replace('2016_', ''))
+		#print query
+		
+		rows = print_select(db, query, verbose=False)
+		#print rows[0], res_tup[0], rows[0][-1]*res_tup[0]
+		
+		#print rows
+		# sometimes pitcher vs. other batter may produce None AVG
+		ab, avg = rows[0][-2], rows[0][-1] 
+		
+		#print pitcher, res_tup[-1].replace('2016_', ''), ab, avg
+		
+		if ab >= 3:
+			total_avg += avg*res_tup[0]
+			valid_cnt += 1
+	print 'estimate:', total_avg / valid_cnt, 'with', valid_cnt, 'batters'
+	
+	
+	return avg / valid_cnt
+	#sim_sum = sum(map(lambda x: x[0], top_res))
+	#sim_sum_abs = sum(map(lambda x: abs(x[0]), top_res))
+	#print sim_sum, sim_sum_abs
+	
+def get_vs_final(db, ptable, bfile, year_str, N):
+	filelist = batters_for_pitcher(db, ptable, year_str)
+	results = get_sim_list(db, filelist, bfile)
+	if len(results) < N:
+		print N, 'is more than results'
+		return -1, -1
+	
+	estimate = estimate_vs(db, results, ptable, N)
+	
+	query = VS_QUERY.replace('PITCHER', ptable)
+	query = query.replace('BATTER', bfile[:-4].replace('2016_', ''))	
+	rows = print_select(db, query, verbose=False)
+	actual = rows[0][-1]
+	print 'actual:', actual
+
+	return actual, estimate
+	
+def get_vs_final_for_all(db, ptable, year_str, N):
+	'''
+	for all batters who faced ptable,
+	returns the actual vs_avg and the estimated vs_avg using at most N similarities
+	'''
+	bfilelist = batters_for_pitcher(db, ptable, year_str)
+	actuals = []
+	estimates = []
+	for bfile in bfilelist:
+		actual, estimate = get_vs_final(db, ptable, bfile, year_str, N)
+		if actual != -1:
+			actuals.append(actual)
+			estimates.append(estimate)
+
+	return actuals, estimates
+	
+	
+	
 def get_url_dict(vs_urls):
 	url_dict = {}
 	
